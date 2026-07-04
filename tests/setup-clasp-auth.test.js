@@ -49,6 +49,44 @@ test.describe('normalizeClaspToken（clasp 認証情報の正規化）', () => {
     assert.strictEqual(rc.oauth2ClientSettings.clientId, 'cid');
   });
 
+  test.it('トップレベル refresh_token + client_id/secret（authorized_user）はローカル資格として変換', async () => {
+    const { normalizeClaspToken } = await load();
+    const rc = normalizeClaspToken(JSON.stringify({
+      type: 'authorized_user',
+      client_id: 'CID',
+      client_secret: 'CSEC',
+      refresh_token: 'RT'
+    }));
+    assert.strictEqual(rc.token.refresh_token, 'RT');
+    assert.strictEqual(rc.isLocalCreds, true);
+    assert.strictEqual(rc.oauth2ClientSettings.clientId, 'CID');
+    assert.strictEqual(rc.oauth2ClientSettings.clientSecret, 'CSEC');
+  });
+
+  test.it('トップレベル refresh_token のみ（クライアント無し）はグローバル資格として変換', async () => {
+    const { normalizeClaspToken } = await load();
+    const rc = normalizeClaspToken(JSON.stringify({ refresh_token: 'RT', scope: 's' }));
+    assert.strictEqual(rc.token.refresh_token, 'RT');
+    assert.strictEqual(rc.isLocalCreds, false);
+    assert.ok(rc.oauth2ClientSettings.clientId);
+  });
+
+  test.it('OAuth クライアントシークレット（installed/web）は明確な例外', async () => {
+    const { normalizeClaspToken } = await load();
+    assert.throws(
+      () => normalizeClaspToken(JSON.stringify({ installed: { client_id: 'x', client_secret: 'y' } })),
+      /クライアントシークレット/
+    );
+  });
+
+  test.it('認識不能な形式はキー名を含む例外（値は出さない）', async () => {
+    const { normalizeClaspToken } = await load();
+    assert.throws(
+      () => normalizeClaspToken(JSON.stringify({ foo: 1, bar: { secret: 'zzz' } })),
+      (err) => /トップレベルのキー: \[foo, bar\]/.test(err.message) && !/zzz/.test(err.message)
+    );
+  });
+
   test.it('空・非 JSON・不明な形式は例外', async () => {
     const { normalizeClaspToken } = await load();
     assert.throws(() => normalizeClaspToken(''));
