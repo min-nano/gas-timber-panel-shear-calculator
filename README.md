@@ -93,6 +93,10 @@ npm test          # = node --test tests/*.test.js
 | `GAS_SCRIPT_ID` | Apps Script のスクリプト ID |
 | `GAS_DEPLOYMENT_ID` | 更新対象のデプロイ ID |
 
+> `CLASP_TOKEN` は、フラット形式（`{access_token, refresh_token, ...}`）でもネスト形式
+> （`{token, oauth2ClientSettings, isLocalCreds}`）でも構いません。CI 内の
+> `scripts/setup-clasp-auth.mjs` が clasp 2.5.x の要求する形式へ自動変換します。
+
 ローカルから手動デプロイする場合：
 
 ```bash

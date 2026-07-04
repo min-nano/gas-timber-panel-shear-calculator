@@ -9,7 +9,7 @@
     "clasp:deploy": "clasp deploy -i \"$GAS_DEPLOYMENT_ID\" -d \"CI deploy\""
   },
   "devDependencies": {
-    "@google/clasp": "^2.4.2"
+    "@google/clasp": "2.5.0"
   },
   "license": "MIT"
 }
