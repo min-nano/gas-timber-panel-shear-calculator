@@ -1,0 +1,58 @@
+name: CI & Deploy
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  # ---------------------------------------------------------------
+  # ユニットテスト（全ブランチ / PR で実行）
+  # ---------------------------------------------------------------
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Run unit tests
+        run: npm test
+
+  # ---------------------------------------------------------------
+  # GAS への push & デプロイ（main への push のみ）
+  #   必要なシークレット:
+  #     CLASP_TOKEN        … ~/.clasprc.json の内容（clasp login のトークン JSON）
+  #     GAS_SCRIPT_ID      … Apps Script のスクリプト ID
+  #     GAS_DEPLOYMENT_ID  … 更新対象のデプロイ ID
+  # ---------------------------------------------------------------
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install clasp
+        run: npm install
+
+      - name: Write clasp credentials
+        run: printf '%s' "$CLASP_TOKEN" > "$HOME/.clasprc.json"
+        env:
+          CLASP_TOKEN: ${{ secrets.CLASP_TOKEN }}
+
+      - name: Write .clasp.json (rootDir=src)
+        run: printf '{"scriptId":"%s","rootDir":"src"}' "$GAS_SCRIPT_ID" > .clasp.json
+        env:
+          GAS_SCRIPT_ID: ${{ secrets.GAS_SCRIPT_ID }}
+
+      - name: Push source to Apps Script
+        run: npx clasp push -f
+
+      - name: Deploy Web App
+        run: npx clasp deploy -i "$GAS_DEPLOYMENT_ID" -d "CI deploy ${{ github.sha }}"
+        env:
+          GAS_DEPLOYMENT_ID: ${{ secrets.GAS_DEPLOYMENT_ID }}

@@ -1,0 +1,13 @@
+# Node
+node_modules/
+npm-debug.log*
+package-lock.json
+
+# clasp — 認証情報とプロジェクト設定（scriptId はシークレット扱い）
+.clasp.json
+.clasprc.json
+~/.clasprc.json
+
+# OS / editor
+.DS_Store
+*.swp

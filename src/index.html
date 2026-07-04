@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <style>
+    [v-cloak] { display: none; }
+    .num { font-variant-numeric: tabular-nums; }
+    @media print {
+      .no-print { display: none !important; }
+      .print-full { width: 100% !important; }
+      @page { size: A4; margin: 15mm; }
+    }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-800">
+  <div id="app" v-cloak class="max-w-6xl mx-auto p-4 md:p-6">
+
+    <!-- ヘッダー -->
+    <header class="mb-6">
+      <h1 class="text-xl md:text-2xl font-bold text-slate-900">
+        面材張り耐力要素 釘配列諸定数の計算
+      </h1>
+      <p class="text-sm text-slate-500 mt-1">
+        グレー本『木造軸組工法住宅の許容応力度設計』 3.2 節（式 3.2.1〜3.2.7）に準拠 ―
+        釘配列諸定数 <span class="font-semibold">Ixy・Zxy・Cxy</span> を求めます。
+      </p>
+    </header>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+      <!-- 入力エリア -->
+      <section class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 no-print">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="font-semibold text-slate-900">入力</h2>
+          <button @click="loadExample"
+            class="text-xs px-3 py-1.5 rounded-md bg-slate-800 text-white hover:bg-slate-700">
+            グレー本の計算例を読み込む
+          </button>
+        </div>
+
+        <!-- 面材寸法 -->
+        <div class="mb-5">
+          <h3 class="text-sm font-semibold text-slate-700 mb-2">面材寸法</h3>
+          <div class="grid grid-cols-3 gap-3">
+            <label class="text-xs text-slate-500">
+              幅 W [mm]
+              <input type="number" v-model.number="width"
+                class="mt-1 w-full rounded-md border-slate-300 border px-2 py-1.5 text-sm num">
+            </label>
+            <label class="text-xs text-slate-500">
+              高さ H [mm]
+              <input type="number" v-model.number="height"
+                class="mt-1 w-full rounded-md border-slate-300 border px-2 py-1.5 text-sm num">
+            </label>
+            <div class="text-xs text-slate-500">
+              面積 Aw [mm²]
+              <div class="mt-1 w-full rounded-md bg-slate-50 border border-slate-200 px-2 py-1.5 text-sm num font-semibold">
+                {{ formatInt(panelArea) }}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 釘配列 -->
+        <div class="mb-2">
+          <h3 class="text-sm font-semibold text-slate-700 mb-2">釘配列</h3>
+          <div class="flex gap-2 mb-3 text-xs">
+            <button @click="mode = 'grid'"
+              :class="mode === 'grid' ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-600'"
+              class="px-3 py-1.5 rounded-md">格子（グリッド）</button>
+            <button @click="mode = 'coords'"
+              :class="mode === 'coords' ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-600'"
+              class="px-3 py-1.5 rounded-md">座標を直接入力</button>
+          </div>
+
+          <div v-if="mode === 'grid'" class="space-y-3">
+            <label class="block text-xs text-slate-500">
+              X 座標のリスト [mm]（カンマ区切り）
+              <input type="text" v-model="gridXText"
+                class="mt-1 w-full rounded-md border-slate-300 border px-2 py-1.5 text-sm num"
+                placeholder="0, 445, 890">
+            </label>
+            <label class="block text-xs text-slate-500">
+              Y 座標のリスト [mm]（カンマ区切り）
+              <input type="text" v-model="gridYText"
+                class="mt-1 w-full rounded-md border-slate-300 border px-2 py-1.5 text-sm num"
+                placeholder="0, 145, 295, 445, 590">
+            </label>
+            <p class="text-xs text-slate-400">
+              X と Y の全組合せに釘を1本ずつ配置します（{{ nails.length }} 本）。
+            </p>
+          </div>
+
+          <div v-else class="space-y-1">
+            <label class="block text-xs text-slate-500">
+              釘座標「x, y」を1行に1本ずつ [mm]
+            </label>
+            <textarea v-model="coordsText" rows="6"
+              class="w-full rounded-md border-slate-300 border px-2 py-1.5 text-sm num font-mono"
+              placeholder="0, 0&#10;0, 145&#10;445, 295"></textarea>
+            <p class="text-xs text-slate-400">{{ nails.length }} 本の釘を認識しました。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 計算結果エリア -->
+      <section class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 print-full">
+        <h2 class="font-semibold text-slate-900 mb-4">計算結果</h2>
+
+        <div v-if="errorMessage"
+          class="mb-4 rounded-md bg-red-50 border border-red-200 text-red-700 text-sm px-3 py-2">
+          {{ errorMessage }}
+        </div>
+
+        <template v-if="result">
+          <!-- 最終結果ハイライト -->
+          <div class="grid grid-cols-3 gap-3 mb-5">
+            <div class="rounded-lg bg-indigo-50 border border-indigo-100 p-3 text-center">
+              <div class="text-xs text-indigo-500">Ixy [mm²/mm²]</div>
+              <div class="text-lg font-bold text-indigo-900 num">{{ fmt(result.Ixy, 4) }}</div>
+            </div>
+            <div class="rounded-lg bg-emerald-50 border border-emerald-100 p-3 text-center">
+              <div class="text-xs text-emerald-600">Zxy [mm/mm²]</div>
+              <div class="text-lg font-bold text-emerald-900 num">{{ fmt(result.Zxy, 4) }}</div>
+            </div>
+            <div class="rounded-lg bg-amber-50 border border-amber-100 p-3 text-center">
+              <div class="text-xs text-amber-600">Cxy</div>
+              <div class="text-lg font-bold text-amber-900 num">{{ fmt(result.Cxy, 3) }}</div>
+            </div>
+          </div>
+
+          <!-- 途中経過（白箱化） -->
+          <h3 class="text-sm font-semibold text-slate-700 mb-2">計算の途中経過</h3>
+          <table class="w-full text-sm">
+            <tbody class="divide-y divide-slate-100">
+              <tr v-for="row in steps" :key="row.label">
+                <td class="py-1.5 pr-2 text-slate-500 whitespace-nowrap">{{ row.label }}</td>
+                <td class="py-1.5 text-slate-400 text-xs whitespace-nowrap">{{ row.eq }}</td>
+                <td class="py-1.5 pl-2 text-right font-semibold text-slate-900 num">{{ row.value }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </template>
+
+        <p v-else-if="!errorMessage" class="text-sm text-slate-400">
+          入力を行うと計算結果がここに表示されます。
+        </p>
+      </section>
+    </div>
+
+    <footer class="text-xs text-slate-400 mt-6 no-print">
+      計算根拠: グレー本 3.2 面材張り耐力要素の詳細計算法で用いる釘配列諸定数の計算。
+      面材・軸材は剛体、軸材どうしはピン接合、平面保持仮定を前提とします。
+    </footer>
+  </div>
+
+  <script>
+    const { createApp } = Vue;
+
+    createApp({
+      data() {
+        return {
+          width: 610,
+          height: 910,
+          mode: 'grid',
+          gridXText: '0, 445, 890',
+          gridYText: '0, 145, 295, 445, 590',
+          coordsText: '',
+          result: null,
+          errorMessage: '',
+          debounceTimer: null
+        };
+      },
+      computed: {
+        panelArea() {
+          const w = Number(this.width) || 0;
+          const h = Number(this.height) || 0;
+          return w * h;
+        },
+        nails() {
+          if (this.mode === 'grid') {
+            const xs = this.parseNumberList(this.gridXText);
+            const ys = this.parseNumberList(this.gridYText);
+            const out = [];
+            for (const x of xs) {
+              for (const y of ys) {
+                out.push({ x, y });
+              }
+            }
+            return out;
+          }
+          return this.parseCoordLines(this.coordsText);
+        },
+        steps() {
+          if (!this.result) return [];
+          const r = this.result;
+          return [
+            { label: '釘本数 n',            eq: '',          value: this.formatInt(r.n) },
+            { label: 'X方向 中立軸 x₀',      eq: '(3.2.2b)',  value: this.fmt(r.x0, 2) + ' mm' },
+            { label: 'Y方向 中立軸 y₀',      eq: '(3.2.2a)',  value: this.fmt(r.y0, 2) + ' mm' },
+            { label: '二次モーメント Ix',    eq: '(3.2.2a)',  value: this.formatInt(r.Ix) + ' mm²' },
+            { label: '二次モーメント Iy',    eq: '(3.2.2b)',  value: this.formatInt(r.Iy) + ' mm²' },
+            { label: 'Ixy',                  eq: '(3.2.1)',   value: this.fmt(r.Ixy, 4) + ' mm²/mm²' },
+            { label: '端部距離 (y-y₀)max',   eq: '',          value: this.fmt(r.dyMax, 2) + ' mm' },
+            { label: '端部距離 (x-x₀)max',   eq: '',          value: this.fmt(r.dxMax, 2) + ' mm' },
+            { label: '釘配列係数 Zx',        eq: '(3.2.4a)',  value: this.fmt(r.Zx, 1) + ' mm' },
+            { label: '釘配列係数 Zy',        eq: '(3.2.4b)',  value: this.fmt(r.Zy, 1) + ' mm' },
+            { label: 'Zxy',                  eq: '(3.2.3)',   value: this.fmt(r.Zxy, 4) + ' mm/mm²' },
+            { label: '変形割合 αx',          eq: '(3.2.7)',   value: this.fmt(r.alphaX, 3) },
+            { label: '塑性釘配列係数 Zpxy',  eq: '(3.2.6)',   value: this.fmt(r.Zpxy, 4) + ' mm/mm²' },
+            { label: 'Cxy',                  eq: '(3.2.5)',   value: this.fmt(r.Cxy, 3) }
+          ];
+        }
+      },
+      watch: {
+        panelArea() { this.scheduleCompute(); },
+        nails() { this.scheduleCompute(); }
+      },
+      mounted() {
+        this.scheduleCompute();
+      },
+      methods: {
+        parseNumberList(text) {
+          return String(text || '')
+            .split(/[,\s]+/)
+            .map(s => s.trim())
+            .filter(s => s.length > 0)
+            .map(Number)
+            .filter(n => isFinite(n));
+        },
+        parseCoordLines(text) {
+          return String(text || '')
+            .split(/\r?\n/)
+            .map(line => line.trim())
+            .filter(line => line.length > 0)
+            .map(line => {
+              const parts = line.split(/[,\s]+/).map(Number);
+              return { x: parts[0], y: parts[1] };
+            })
+            .filter(p => isFinite(p.x) && isFinite(p.y));
+        },
+        loadExample() {
+          this.width = 610;
+          this.height = 910;
+          this.mode = 'grid';
+          this.gridXText = '0, 445, 890';
+          this.gridYText = '0, 145, 295, 445, 590';
+        },
+        scheduleCompute() {
+          clearTimeout(this.debounceTimer);
+          this.debounceTimer = setTimeout(this.compute, 250);
+        },
+        compute() {
+          this.errorMessage = '';
+          if (this.nails.length === 0 || !(this.panelArea > 0)) {
+            this.result = null;
+            return;
+          }
+          const payload = { nails: this.nails, panelArea: this.panelArea };
+
+          // サーバ側の唯一の計算実装（ユニットテスト済み）を呼び出す。
+          if (typeof google !== 'undefined' && google.script && google.script.run) {
+            google.script.run
+              .withSuccessHandler(res => {
+                if (res && res.ok) {
+                  this.result = res.result;
+                  this.errorMessage = '';
+                } else {
+                  this.result = null;
+                  this.errorMessage = (res && res.error) || '計算に失敗しました。';
+                }
+              })
+              .withFailureHandler(err => {
+                this.result = null;
+                this.errorMessage = (err && err.message) || String(err);
+              })
+              .computeNailArrayConstantsApi(payload);
+          } else {
+            this.errorMessage = 'この画面は GAS Web アプリとして開いてください（google.script.run が利用できません）。';
+          }
+        },
+        fmt(v, digits) {
+          if (v === null || v === undefined || !isFinite(v)) return '-';
+          return Number(v).toLocaleString('ja-JP', {
+            minimumFractionDigits: digits,
+            maximumFractionDigits: digits
+          });
+        },
+        formatInt(v) {
+          if (v === null || v === undefined || !isFinite(v)) return '-';
+          return Math.round(v).toLocaleString('ja-JP');
+        }
+      }
+    }).mount('#app');
+  </script>
+</body>
+</html>
