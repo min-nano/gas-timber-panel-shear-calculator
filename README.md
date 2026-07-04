@@ -89,13 +89,13 @@ npm test          # = node --test tests/*.test.js
 
 | シークレット | 内容 |
 |-------------|------|
-| `CLASP_TOKEN` | `clasp login` で得られる `~/.clasprc.json` の内容（JSON） |
+| `CLASP_TOKEN` | `clasp login` 後の `~/.clasprc.json` の内容（JSON）をそのまま |
 | `GAS_SCRIPT_ID` | Apps Script のスクリプト ID |
 | `GAS_DEPLOYMENT_ID` | 更新対象のデプロイ ID |
 
-> `CLASP_TOKEN` は、フラット形式（`{access_token, refresh_token, ...}`）でもネスト形式
-> （`{token, oauth2ClientSettings, isLocalCreds}`）でも構いません。CI 内の
-> `scripts/setup-clasp-auth.mjs` が clasp 2.5.x の要求する形式へ自動変換します。
+> CI は **clasp 3.x** を使用します。`~/.clasprc.json`（`{ "tokens": { ... } }` 形式）を
+> そのまま読み込むため、`clasp login` で生成された内容を丸ごと `CLASP_TOKEN` に貼り付けてください。
+> clasp 3.x は旧 V1 形式にも後方互換です。
 
 ローカルから手動デプロイする場合：
 

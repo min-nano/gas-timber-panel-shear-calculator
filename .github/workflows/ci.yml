@@ -40,8 +40,9 @@ jobs:
         run: npm install
 
       - name: Write clasp credentials
-        # CLASP_TOKEN を clasp 2.5.x が読める ~/.clasprc.json 形式へ正規化する。
-        run: node scripts/setup-clasp-auth.mjs
+        # clasp 3.x は ~/.clasprc.json（{ "tokens": { ... } } 形式）をそのまま読む。
+        # V1 形式（フラット/ネスト）にも後方互換なので、CLASP_TOKEN はそのまま書き出す。
+        run: printf '%s' "$CLASP_TOKEN" > "$HOME/.clasprc.json"
         env:
           CLASP_TOKEN: ${{ secrets.CLASP_TOKEN }}
 
