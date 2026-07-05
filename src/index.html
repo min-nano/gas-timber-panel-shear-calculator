@@ -120,15 +120,15 @@
           <div class="grid grid-cols-3 gap-3 mb-5">
             <div class="rounded-lg bg-indigo-50 border border-indigo-100 p-3 text-center">
               <div class="text-xs text-indigo-500">Ixy [mm²/mm²]</div>
-              <div class="text-lg font-bold text-indigo-900 num">{{ fmt(result.Ixy, 4) }}</div>
+              <div class="text-lg font-bold text-indigo-900 num">{{ sig(result.Ixy, 6) }}</div>
             </div>
             <div class="rounded-lg bg-emerald-50 border border-emerald-100 p-3 text-center">
               <div class="text-xs text-emerald-600">Zxy [mm/mm²]</div>
-              <div class="text-lg font-bold text-emerald-900 num">{{ fmt(result.Zxy, 4) }}</div>
+              <div class="text-lg font-bold text-emerald-900 num">{{ sig(result.Zxy, 6) }}</div>
             </div>
             <div class="rounded-lg bg-amber-50 border border-amber-100 p-3 text-center">
               <div class="text-xs text-amber-600">Cxy</div>
-              <div class="text-lg font-bold text-amber-900 num">{{ fmt(result.Cxy, 3) }}</div>
+              <div class="text-lg font-bold text-amber-900 num">{{ sig(result.Cxy, 6) }}</div>
             </div>
           </div>
 
@@ -199,19 +199,19 @@
           const r = this.result;
           return [
             { label: '釘本数 n',            eq: '',          value: this.formatInt(r.n) },
-            { label: 'X方向 中立軸 x₀',      eq: '(3.2.2b)',  value: this.fmt(r.x0, 2) + ' mm' },
-            { label: 'Y方向 中立軸 y₀',      eq: '(3.2.2a)',  value: this.fmt(r.y0, 2) + ' mm' },
+            { label: 'X方向 中立軸 x₀',      eq: '(3.2.2b)',  value: this.sig(r.x0, 6) + ' mm' },
+            { label: 'Y方向 中立軸 y₀',      eq: '(3.2.2a)',  value: this.sig(r.y0, 6) + ' mm' },
             { label: '二次モーメント Ix',    eq: '(3.2.2a)',  value: this.formatInt(r.Ix) + ' mm²' },
             { label: '二次モーメント Iy',    eq: '(3.2.2b)',  value: this.formatInt(r.Iy) + ' mm²' },
-            { label: 'Ixy',                  eq: '(3.2.1)',   value: this.fmt(r.Ixy, 4) + ' mm²/mm²' },
-            { label: '端部距離 (y-y₀)max',   eq: '',          value: this.fmt(r.dyMax, 2) + ' mm' },
-            { label: '端部距離 (x-x₀)max',   eq: '',          value: this.fmt(r.dxMax, 2) + ' mm' },
-            { label: '釘配列係数 Zx',        eq: '(3.2.4a)',  value: this.fmt(r.Zx, 1) + ' mm' },
-            { label: '釘配列係数 Zy',        eq: '(3.2.4b)',  value: this.fmt(r.Zy, 1) + ' mm' },
-            { label: 'Zxy',                  eq: '(3.2.3)',   value: this.fmt(r.Zxy, 4) + ' mm/mm²' },
-            { label: '変形割合 αx',          eq: '(3.2.7)',   value: this.fmt(r.alphaX, 3) },
-            { label: '塑性釘配列係数 Zpxy',  eq: '(3.2.6)',   value: this.fmt(r.Zpxy, 4) + ' mm/mm²' },
-            { label: 'Cxy',                  eq: '(3.2.5)',   value: this.fmt(r.Cxy, 3) }
+            { label: 'Ixy',                  eq: '(3.2.1)',   value: this.sig(r.Ixy, 6) + ' mm²/mm²' },
+            { label: '端部距離 (y-y₀)max',   eq: '',          value: this.sig(r.dyMax, 6) + ' mm' },
+            { label: '端部距離 (x-x₀)max',   eq: '',          value: this.sig(r.dxMax, 6) + ' mm' },
+            { label: '釘配列係数 Zx',        eq: '(3.2.4a)',  value: this.sig(r.Zx, 6) + ' mm' },
+            { label: '釘配列係数 Zy',        eq: '(3.2.4b)',  value: this.sig(r.Zy, 6) + ' mm' },
+            { label: 'Zxy',                  eq: '(3.2.3)',   value: this.sig(r.Zxy, 6) + ' mm/mm²' },
+            { label: '変形割合 αx',          eq: '(3.2.7)',   value: this.sig(r.alphaX, 6) },
+            { label: '塑性釘配列係数 Zpxy',  eq: '(3.2.6)',   value: this.sig(r.Zpxy, 6) + ' mm/mm²' },
+            { label: 'Cxy',                  eq: '(3.2.5)',   value: this.sig(r.Cxy, 6) }
           ];
         }
       },
@@ -282,12 +282,29 @@
             this.errorMessage = 'この画面は GAS Web アプリとして開いてください（google.script.run が利用できません）。';
           }
         },
-        fmt(v, digits) {
+        // 有効桁数（significant figures）で整形する。
+        // 「小数点以下の桁数」固定だと、Zxy≈0.0036 や Zpxy≈0.0045 のような
+        // 小さい値で有効桁が 2 桁しか出ず、Cxy = Zpxy/Zxy の検算ができない。
+        // toPrecision で有効桁を確保し、整数部にのみ 3 桁区切りを付与する
+        // （末尾の 0 は有効桁として保持したいので小数部は加工しない）。
+        sig(v, figures) {
           if (v === null || v === undefined || !isFinite(v)) return '-';
-          return Number(v).toLocaleString('ja-JP', {
-            minimumFractionDigits: digits,
-            maximumFractionDigits: digits
-          });
+          const num = Number(v);
+          const digits = figures || 6;
+          if (num === 0) return '0';
+          let str = num.toPrecision(digits);
+          // toPrecision は桁が大きく/小さく離れると指数表記になるため、
+          // 工学値として読めるよう通常の小数表記へ展開する。
+          if (str.indexOf('e') !== -1 || str.indexOf('E') !== -1) {
+            const exp = Math.floor(Math.log10(Math.abs(num)));
+            const fractionDigits = Math.min(100, Math.max(0, digits - 1 - exp));
+            str = num.toFixed(fractionDigits);
+          }
+          const negative = str.charAt(0) === '-';
+          if (negative) str = str.slice(1);
+          const parts = str.split('.');
+          parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+          return (negative ? '-' : '') + parts.join('.');
         },
         formatInt(v) {
           if (v === null || v === undefined || !isFinite(v)) return '-';
