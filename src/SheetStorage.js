@@ -1,11 +1,15 @@
 /**
  * スプレッドシートへの保存（GAS 専用の I/O レイヤ）
  * =====================================================================
- * 計算 1 回分（入力値＋計算結果）を、履歴シートへ「1 行 = 1 スナップショット」で
- * 追記保存する。列レイアウト（セルのマッピング）は SheetSchema.js に一元化された
- * スキーマを唯一の定義として用いる。本ファイルは SpreadsheetApp/DriveApp 等の
- * GAS 専用 API を扱うため、Node のユニットテスト対象からは外す
- * （テスト対象の純粋ロジックは SheetSchema.js 側に置く）。
+ * 1 スプレッドシート = 1 物件（プロジェクト）とし、計算 1 回分（入力値＋計算結果）を
+ * 2 つのタブへ書き込む:
+ *   - 現在値タブ（既定「パターン」）… patternId で upsert。1 行 = 1 パターンの正本。
+ *   - 履歴タブ（既定「履歴」）      … 常に追記。1 行 = 1 保存の時系列ログ。
+ *
+ * 列レイアウト（セルのマッピング）は SheetSchema.js に一元化されたスキーマを
+ * 唯一の定義として用いる。本ファイルは SpreadsheetApp/DriveApp 等の GAS 専用 API を
+ * 扱うため、Node のユニットテスト対象からは外す（テスト対象の純粋ロジックは
+ * SheetSchema.js 側に置く）。
  *
  * 実行はアクセスユーザーとして行われる（appsscript.json: USER_ACCESSING）ため、
  * 保存先は各ユーザー自身の Drive。scope は drive.file（アプリが作成/選択した
@@ -14,49 +18,101 @@
  */
 
 /**
- * 履歴を書き込むシート（タブ）の既定名。
- * @type {string}
- */
-var DEFAULT_HISTORY_SHEET_NAME = '計算履歴';
-
-/**
  * 新規作成するスプレッドシートの既定名。
  * @type {string}
  */
 var DEFAULT_SPREADSHEET_NAME = '面材張り耐力要素 計算履歴';
 
 /**
- * 計算 1 回分を履歴シートへ追記保存する。
+ * 計算 1 回分を保存する。現在値タブへ upsert し、履歴タブへ追記する。
  *
  * options:
  *   - spreadsheetId {string}   … 既存の保存先。あれば追記、無ければ新規作成。
  *   - spreadsheetName {string} … 新規作成時のファイル名（既定: DEFAULT_SPREADSHEET_NAME）。
- *   - sheetName {string}       … タブ名（既定: DEFAULT_HISTORY_SHEET_NAME）。
  *   - folderId {string}        … 新規作成時に格納する Drive フォルダ ID（任意）。
+ *   - projectName {string}     … 物件名。
+ *   - patternId {string}       … パターン識別子（現在値タブの upsert キー）。
+ *   - patternName {string}     … パターン名。
+ *   - currentSheetName {string}… 現在値タブ名（既定: SHEET_CURRENT_TAB_NAME）。
+ *   - historySheetName {string}… 履歴タブ名（既定: SHEET_HISTORY_TAB_NAME）。
  *
  * @param {{width:number, height:number, panelArea:number, nails:{x:number,y:number}[]}} input 入力
  * @param {Object} result computeNailArrayConstants の戻り値
- * @param {Object} [options] 保存先オプション
- * @return {{spreadsheetId:string, spreadsheetUrl:string, sheetName:string,
- *          rowNumber:number, schemaVersion:number}} 保存結果
+ * @param {Object} [options] 保存先・識別オプション
+ * @return {{spreadsheetId:string, spreadsheetUrl:string,
+ *          currentSheetName:string, historySheetName:string,
+ *          patternRow:number, patternInserted:boolean, historyRow:number,
+ *          patternId:string, schemaVersion:number}} 保存結果
  */
 function saveSheetRecord(input, result, options) {
   options = options || {};
-  var sheetName = options.sheetName || DEFAULT_HISTORY_SHEET_NAME;
+  var currentName = options.currentSheetName || SHEET_CURRENT_TAB_NAME;
+  var historyName = options.historySheetName || SHEET_HISTORY_TAB_NAME;
+  var meta = {
+    projectName: options.projectName,
+    patternId: options.patternId,
+    patternName: options.patternName
+  };
 
   var spreadsheet = openOrCreateSpreadsheet_(options);
-  var sheet = ensureHistorySheet_(spreadsheet, sheetName);
 
-  // スキーマに沿ってレコード化 → 列順の 1 行へ変換して追記。
-  var record = buildSheetRecord(input, result, new Date());
+  // スキーマに沿ってレコード化 → 列順の 1 行へ変換。
+  var record = buildSheetRecord(input, result, new Date(), meta);
   var row = sheetRowFromRecord(record);
-  sheet.appendRow(row);
+
+  // 現在値タブ: patternId で upsert（同じパターンは同じ行を上書き）。
+  var currentSheet = ensureSheetWithHeader_(spreadsheet, currentName);
+  var upsert = upsertByPatternId_(currentSheet, row, record.patternId);
+
+  // 履歴タブ: 常に追記。
+  var historySheet = ensureSheetWithHeader_(spreadsheet, historyName);
+  historySheet.appendRow(row);
 
   return {
     spreadsheetId: spreadsheet.getId(),
     spreadsheetUrl: spreadsheet.getUrl(),
-    sheetName: sheetName,
-    rowNumber: sheet.getLastRow(),
+    currentSheetName: currentName,
+    historySheetName: historyName,
+    patternRow: upsert.rowNumber,
+    patternInserted: upsert.inserted,
+    historyRow: historySheet.getLastRow(),
+    patternId: record.patternId,
+    schemaVersion: SHEET_SCHEMA_VERSION
+  };
+}
+
+/**
+ * 物件（スプレッドシート）内の全パターン（現在値タブの各行）を読み出す。
+ * アプリのページネーション（パターン切替）・既存物件の読み込みに使う。
+ *
+ * @param {string} spreadsheetId 対象スプレッドシートの ID
+ * @param {Object} [options] { currentSheetName }
+ * @return {{spreadsheetId:string, spreadsheetUrl:string, currentSheetName:string,
+ *          patterns:Object[], schemaVersion:number}} パターン一覧（列キー付きレコード）
+ */
+function loadSheetPatterns(spreadsheetId, options) {
+  options = options || {};
+  var currentName = options.currentSheetName || SHEET_CURRENT_TAB_NAME;
+
+  var spreadsheet = SpreadsheetApp.openById(spreadsheetId);
+  var sheet = spreadsheet.getSheetByName(currentName);
+  var patterns = [];
+
+  if (sheet) {
+    var lastRow = sheet.getLastRow();
+    if (lastRow >= 2) {
+      var values = sheet.getRange(2, 1, lastRow - 1, SHEET_COLUMNS.length).getValues();
+      for (var i = 0; i < values.length; i++) {
+        patterns.push(sheetRecordFromRow(values[i]));
+      }
+    }
+  }
+
+  return {
+    spreadsheetId: spreadsheet.getId(),
+    spreadsheetUrl: spreadsheet.getUrl(),
+    currentSheetName: currentName,
+    patterns: patterns,
     schemaVersion: SHEET_SCHEMA_VERSION
   };
 }
@@ -92,19 +148,20 @@ function openOrCreateSpreadsheet_(options) {
 
 /**
  * 指定名のタブを取得（無ければ作成）し、見出し行がスキーマと一致していることを保証する。
- * 先頭シート（新規作成時の「シート1」）が空なら、それを履歴シートとして流用・改名する。
+ * 新規スプレッドシート作成直後の空の既定シート（1 枚だけ・空）があれば、
+ * それを改名して流用する。
  *
  * @param {GoogleAppsScript.Spreadsheet.Spreadsheet} spreadsheet 保存先
  * @param {string} sheetName タブ名
  * @return {GoogleAppsScript.Spreadsheet.Sheet}
  */
-function ensureHistorySheet_(spreadsheet, sheetName) {
+function ensureSheetWithHeader_(spreadsheet, sheetName) {
   var sheet = spreadsheet.getSheetByName(sheetName);
 
   if (!sheet) {
-    // 新規作成直後の空の既定シートがあれば、それを改名して使い回す。
     var sheets = spreadsheet.getSheets();
     if (sheets.length === 1 && sheets[0].getLastRow() === 0) {
+      // 新規作成直後の空の既定シートを流用・改名する。
       sheet = sheets[0].setName(sheetName);
     } else {
       sheet = spreadsheet.insertSheet(sheetName);
@@ -129,4 +186,33 @@ function ensureHeaderRow_(sheet) {
     sheet.getRange(1, 1, 1, header.length).setFontWeight('bold');
     sheet.setFrozenRows(1);
   }
+}
+
+/**
+ * 現在値タブへ patternId をキーに upsert する。
+ * 既存の一致行があれば上書き、無ければ追記する。
+ * patternId が空の場合は同定できないため、常に追記扱いとする。
+ *
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet 現在値タブ
+ * @param {Array} row 列順の値
+ * @param {string} patternId upsert キー
+ * @return {{rowNumber:number, inserted:boolean}} 書き込んだ行番号と、新規追加か否か
+ */
+function upsertByPatternId_(sheet, row, patternId) {
+  var keyCol = sheetColumnIndex(SHEET_KEY_COLUMN); // 1 始まり
+  var lastRow = sheet.getLastRow();
+
+  if (patternId && keyCol > 0 && lastRow >= 2) {
+    var ids = sheet.getRange(2, keyCol, lastRow - 1, 1).getValues();
+    for (var i = 0; i < ids.length; i++) {
+      if (String(ids[i][0]) === String(patternId)) {
+        var target = i + 2; // 見出し行を除いた 0 始まり → 実行行番号
+        sheet.getRange(target, 1, 1, row.length).setValues([row]);
+        return { rowNumber: target, inserted: false };
+      }
+    }
+  }
+
+  sheet.appendRow(row);
+  return { rowNumber: sheet.getLastRow(), inserted: true };
 }

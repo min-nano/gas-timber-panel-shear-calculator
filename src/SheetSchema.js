@@ -1,17 +1,28 @@
 /**
  * スプレッドシート保存レイアウト（セルマッピング）のスキーマ定義
  * =====================================================================
- * 計算の入力値と結果を Google スプレッドシートへ「1 行 = 1 計算スナップショット」
- * で追記保存する際の、列の並び（＝セルのマッピング）を一元管理する。
+ * 計算の入力値と結果を Google スプレッドシートへ保存する際の、列の並び
+ * （＝セルのマッピング）を一元管理する。
+ *
+ * 【データモデル（v2）】
+ *   - 1 スプレッドシート = 1 物件（プロジェクト）。
+ *   - 1 物件は複数の「パターン」を持つ（例: 同一物件内の複数の面材配置）。
+ *   - 保存は 2 タブ構成:
+ *       ・現在値タブ（既定名「パターン」）… 1 行 = 1 パターン。patternId で upsert
+ *         （＝同じパターンは常に同じ行を上書き）。他シート/スクリプトが参照する正本。
+ *       ・履歴タブ（既定名「履歴」）… 1 行 = 1 保存。常に追記。時系列の記録。
+ *   - どちらのタブも本ファイルの同一スキーマ（列レイアウト）を用いる。
  *
  * 【なぜスキーマを切り出すのか】
- *   将来、別のシート・スクリプト・帳票がこの履歴シートを参照する可能性がある。
- *   そのとき「Cxy は S 列」のように列位置をハードコードすると、列を 1 つ挿入した
- *   だけで全参照がずれ、静かにバグる。そこで列レイアウトを本ファイルに集約し、
- *   バージョン番号（SHEET_SCHEMA_VERSION）で管理する。参照側は
+ *   将来、別のシート・スクリプト・帳票がこのシートを参照する可能性がある。
+ *   列位置をハードコードすると、列を 1 つ挿入しただけで全参照がずれ、静かにバグる。
+ *   そこで列レイアウトを本ファイルに集約し、バージョン番号（SHEET_SCHEMA_VERSION）
+ *   で管理する。参照側は
  *     - 各行に記録される schemaVersion 列でレイアウト版を確認できる
  *     - sheetColumnLetter('Cxy') のように「キー → 列」を問い合わせできる
  *   ため、列位置が変わってもコードを1か所直せば追従できる。
+ *   さらに現在値タブでは patternId で行が固定される（upsert）ため、
+ *   「列＝フィールド」「行＝パターン」の 2 次元でセル参照が安定する。
  *
  * 【バージョン運用】
  *   列の追加・削除・並べ替え・意味の変更を行ったら SHEET_SCHEMA_VERSION を上げる。
@@ -28,45 +39,63 @@
 /**
  * セルマッピングのスキーマ版。
  * 列レイアウトを変更したら必ずインクリメントすること。
+ *   v1 → v2: 物件名・パターンID・パターン名（key 列）を追加。
  * @type {number}
  */
-var SHEET_SCHEMA_VERSION = 1;
+var SHEET_SCHEMA_VERSION = 2;
 
 /**
- * 履歴シートの列定義（この配列の並び順が、そのままセルのマッピング）。
+ * 現在値タブで upsert（行の同定）に用いるキー列のキー名。
+ * @type {string}
+ */
+var SHEET_KEY_COLUMN = 'patternId';
+
+/**
+ * 各タブ（シート）の既定名。
+ */
+var SHEET_CURRENT_TAB_NAME = 'パターン';   // 現在値: 1 行 = 1 パターン（upsert）
+var SHEET_HISTORY_TAB_NAME = '履歴';       // 履歴  : 1 行 = 1 保存（追記）
+
+/**
+ * 列定義（この配列の並び順が、そのままセルのマッピング）。
  * 各列:
  *   - key    … レコード内部のキー（プログラムからの参照名。変更しない）
  *   - header … シート見出し行に表示する日本語ラベル
  *   - unit   … 単位（見出しに [unit] として付与。無単位は ''）
- *   - source … 'meta'（記録メタ情報）/ 'input'（入力値）/ 'result'（計算結果）
+ *   - source … 'meta'（記録メタ）/ 'key'（物件・パターン識別）/
+ *              'input'（入力値）/ 'result'（計算結果）
  *
  * 入力値だけでなく結果セルも列として持つことで、他データとの連携時に
  * 再計算せずとも結果を直接参照できる。
  * @type {{key:string, header:string, unit:string, source:string}[]}
  */
 var SHEET_COLUMNS = [
-  { key: 'recordedAt',    header: '記録日時',            unit: '',         source: 'meta' },
-  { key: 'schemaVersion', header: 'スキーマ版',          unit: '',         source: 'meta' },
+  { key: 'recordedAt',    header: '記録日時',            unit: '',          source: 'meta' },
+  { key: 'schemaVersion', header: 'スキーマ版',          unit: '',          source: 'meta' },
 
-  { key: 'width',         header: '面材幅 W',            unit: 'mm',       source: 'input' },
-  { key: 'height',        header: '面材高さ H',          unit: 'mm',       source: 'input' },
-  { key: 'panelArea',     header: '面材面積 Aw',         unit: 'mm^2',     source: 'input' },
-  { key: 'nailCount',     header: '釘本数 n',            unit: '',         source: 'input' },
-  { key: 'nailCoords',    header: '釘座標(JSON)',        unit: 'mm',       source: 'input' },
+  { key: 'projectName',   header: '物件名',              unit: '',          source: 'key' },
+  { key: 'patternId',     header: 'パターンID',          unit: '',          source: 'key' },
+  { key: 'patternName',   header: 'パターン名',          unit: '',          source: 'key' },
 
-  { key: 'x0',            header: 'X方向中立軸 x0',      unit: 'mm',       source: 'result' },
-  { key: 'y0',            header: 'Y方向中立軸 y0',      unit: 'mm',       source: 'result' },
-  { key: 'Ix',            header: '二次モーメント Ix',   unit: 'mm^2',     source: 'result' },
-  { key: 'Iy',            header: '二次モーメント Iy',   unit: 'mm^2',     source: 'result' },
+  { key: 'width',         header: '面材幅 W',            unit: 'mm',        source: 'input' },
+  { key: 'height',        header: '面材高さ H',          unit: 'mm',        source: 'input' },
+  { key: 'panelArea',     header: '面材面積 Aw',         unit: 'mm^2',      source: 'input' },
+  { key: 'nailCount',     header: '釘本数 n',            unit: '',          source: 'input' },
+  { key: 'nailCoords',    header: '釘座標(JSON)',        unit: 'mm',        source: 'input' },
+
+  { key: 'x0',            header: 'X方向中立軸 x0',      unit: 'mm',        source: 'result' },
+  { key: 'y0',            header: 'Y方向中立軸 y0',      unit: 'mm',        source: 'result' },
+  { key: 'Ix',            header: '二次モーメント Ix',   unit: 'mm^2',      source: 'result' },
+  { key: 'Iy',            header: '二次モーメント Iy',   unit: 'mm^2',      source: 'result' },
   { key: 'Ixy',           header: 'Ixy',                 unit: 'mm^2/mm^2', source: 'result' },
-  { key: 'dxMax',         header: '端部距離 (x-x0)max',  unit: 'mm',       source: 'result' },
-  { key: 'dyMax',         header: '端部距離 (y-y0)max',  unit: 'mm',       source: 'result' },
-  { key: 'Zx',            header: '釘配列係数 Zx',       unit: 'mm',       source: 'result' },
-  { key: 'Zy',            header: '釘配列係数 Zy',       unit: 'mm',       source: 'result' },
-  { key: 'Zxy',           header: 'Zxy',                 unit: 'mm/mm^2',  source: 'result' },
-  { key: 'alphaX',        header: '変形割合 alphaX',     unit: '',         source: 'result' },
-  { key: 'Zpxy',          header: '塑性釘配列係数 Zpxy', unit: 'mm/mm^2',  source: 'result' },
-  { key: 'Cxy',           header: 'Cxy',                 unit: '',         source: 'result' }
+  { key: 'dxMax',         header: '端部距離 (x-x0)max',  unit: 'mm',        source: 'result' },
+  { key: 'dyMax',         header: '端部距離 (y-y0)max',  unit: 'mm',        source: 'result' },
+  { key: 'Zx',            header: '釘配列係数 Zx',       unit: 'mm',        source: 'result' },
+  { key: 'Zy',            header: '釘配列係数 Zy',       unit: 'mm',        source: 'result' },
+  { key: 'Zxy',           header: 'Zxy',                 unit: 'mm/mm^2',   source: 'result' },
+  { key: 'alphaX',        header: '変形割合 alphaX',     unit: '',          source: 'result' },
+  { key: 'Zpxy',          header: '塑性釘配列係数 Zpxy', unit: 'mm/mm^2',   source: 'result' },
+  { key: 'Cxy',           header: 'Cxy',                 unit: '',          source: 'result' }
 ];
 
 /**
@@ -123,7 +152,7 @@ function sheetIndexToLetter(index) {
 
 /**
  * 指定キーの列の A1 列文字を返す（他シート/スクリプトからの参照用）。
- * 例: sheetColumnLetter('Cxy') → 'T'
+ * 例: sheetColumnLetter('Cxy') → 'W'
  *
  * @param {string} key 列キー
  * @return {string} A1 列文字
@@ -137,20 +166,45 @@ function sheetColumnLetter(key) {
 }
 
 /**
- * 入力値・計算結果から、スキーマに沿った 1 レコード（列キー → 値の平坦オブジェクト）を組み立てる。
- * ここで結果セルの値も一緒に確定させることで、保存後に他データと連携しやすくする。
+ * 値が有限数なら数値のまま、そうでなければ空文字（セル空欄）を返す補助関数。
+ * @param {*} v 値
+ * @return {number|string} 数値または ''
+ */
+function numberOrBlank(v) {
+  return (typeof v === 'number' && isFinite(v)) ? v : '';
+}
+
+/**
+ * 値を文字列セル値へ正規化する（null/undefined は空欄）。
+ * @param {*} v 値
+ * @return {string} 文字列または ''
+ */
+function stringOrBlank(v) {
+  return (v === undefined || v === null) ? '' : String(v);
+}
+
+/**
+ * 入力値・計算結果・識別情報から、スキーマに沿った 1 レコード
+ * （列キー → 値の平坦オブジェクト）を組み立てる。
+ * 結果セルの値も一緒に確定させることで、保存後に他データと連携しやすくする。
  *
  * @param {{width:number, height:number, panelArea:number, nails:{x:number,y:number}[]}} input 入力
  * @param {Object} result computeNailArrayConstants の戻り値
- * @param {Date|string} [recordedAt] 記録日時（省略時は呼び出し側で付与）
+ * @param {Date|string} [recordedAt] 記録日時（省略時は空欄）
+ * @param {{projectName?:string, patternId?:string, patternName?:string}} [meta] 物件・パターン識別
  * @return {Object} 列キーをプロパティに持つレコード
  */
-function buildSheetRecord(input, result, recordedAt) {
+function buildSheetRecord(input, result, recordedAt, meta) {
   input = input || {};
   result = result || {};
+  meta = meta || {};
   return {
-    recordedAt: recordedAt !== undefined && recordedAt !== null ? recordedAt : '',
+    recordedAt: (recordedAt !== undefined && recordedAt !== null) ? recordedAt : '',
     schemaVersion: SHEET_SCHEMA_VERSION,
+
+    projectName: stringOrBlank(meta.projectName),
+    patternId: stringOrBlank(meta.patternId),
+    patternName: stringOrBlank(meta.patternName),
 
     width: numberOrBlank(input.width),
     height: numberOrBlank(input.height),
@@ -175,15 +229,6 @@ function buildSheetRecord(input, result, recordedAt) {
 }
 
 /**
- * 値が有限数なら数値のまま、そうでなければ空文字（セル空欄）を返す補助関数。
- * @param {*} v 値
- * @return {number|string} 数値または ''
- */
-function numberOrBlank(v) {
-  return (typeof v === 'number' && isFinite(v)) ? v : '';
-}
-
-/**
  * レコードを、SHEET_COLUMNS の並び順どおりの 1 次元配列（＝シートの 1 行）に変換する。
  * この配列の並びがセルのマッピングそのもの。
  *
@@ -199,15 +244,34 @@ function sheetRowFromRecord(record) {
 }
 
 /**
- * スキーマの自己記述（バージョン・列マッピング一覧）を返す。
+ * シートの 1 行（列順の配列）を、列キー付きのレコードへ復元する。
+ * 現在値タブの読み出し（パターン一覧の取得）に用いる。
+ *
+ * @param {Array} row 列順の値の配列
+ * @return {Object} 列キーをプロパティに持つレコード
+ */
+function sheetRecordFromRow(row) {
+  row = row || [];
+  var record = {};
+  for (var i = 0; i < SHEET_COLUMNS.length; i++) {
+    record[SHEET_COLUMNS[i].key] = row[i];
+  }
+  return record;
+}
+
+/**
+ * スキーマの自己記述（バージョン・キー列・タブ名・列マッピング一覧）を返す。
  * 他のスクリプトや UI が列レイアウトを機械的に把握するために使う。
  *
- * @return {{version:number, columns:{key:string, header:string, unit:string,
- *          source:string, index:number, letter:string}[]}}
+ * @return {{version:number, keyColumn:string, tabs:{current:string, history:string},
+ *          columns:{key:string, header:string, unit:string, source:string,
+ *          index:number, letter:string}[]}}
  */
 function sheetSchemaDescriptor() {
   return {
     version: SHEET_SCHEMA_VERSION,
+    keyColumn: SHEET_KEY_COLUMN,
+    tabs: { current: SHEET_CURRENT_TAB_NAME, history: SHEET_HISTORY_TAB_NAME },
     columns: SHEET_COLUMNS.map(function (column, i) {
       return {
         key: column.key,
@@ -230,15 +294,20 @@ function sheetSchemaDescriptor() {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     SHEET_SCHEMA_VERSION: SHEET_SCHEMA_VERSION,
+    SHEET_KEY_COLUMN: SHEET_KEY_COLUMN,
+    SHEET_CURRENT_TAB_NAME: SHEET_CURRENT_TAB_NAME,
+    SHEET_HISTORY_TAB_NAME: SHEET_HISTORY_TAB_NAME,
     SHEET_COLUMNS: SHEET_COLUMNS,
     sheetHeaderLabel: sheetHeaderLabel,
     sheetHeaderRow: sheetHeaderRow,
     sheetColumnIndex: sheetColumnIndex,
     sheetIndexToLetter: sheetIndexToLetter,
     sheetColumnLetter: sheetColumnLetter,
-    buildSheetRecord: buildSheetRecord,
     numberOrBlank: numberOrBlank,
+    stringOrBlank: stringOrBlank,
+    buildSheetRecord: buildSheetRecord,
     sheetRowFromRecord: sheetRowFromRecord,
+    sheetRecordFromRow: sheetRecordFromRow,
     sheetSchemaDescriptor: sheetSchemaDescriptor
   };
 }

@@ -32,17 +32,29 @@ test.describe('スキーマ版とセルマッピングの安定性', () => {
     assert.strictEqual(new Set(keys).size, keys.length);
   });
 
-  test.it('各列は key / header / source を持ち、source は meta|input|result', () => {
+  test.it('各列は key / header / source を持ち、source は meta|key|input|result', () => {
     for (const col of schema.SHEET_COLUMNS) {
       assert.ok(col.key && typeof col.key === 'string');
       assert.ok(col.header && typeof col.header === 'string');
-      assert.ok(['meta', 'input', 'result'].includes(col.source), '不正な source: ' + col.source);
+      assert.ok(['meta', 'key', 'input', 'result'].includes(col.source), '不正な source: ' + col.source);
     }
   });
 
   test.it('先頭 2 列はメタ（記録日時・スキーマ版）で固定', () => {
     assert.strictEqual(schema.SHEET_COLUMNS[0].key, 'recordedAt');
     assert.strictEqual(schema.SHEET_COLUMNS[1].key, 'schemaVersion');
+  });
+
+  test.it('物件・パターン識別（key 列）が揃っている', () => {
+    const keyCols = schema.SHEET_COLUMNS.filter((c) => c.source === 'key').map((c) => c.key);
+    assert.ok(keyCols.includes('projectName'), '物件名列が無い');
+    assert.ok(keyCols.includes('patternId'), 'パターンID列が無い');
+    assert.ok(keyCols.includes('patternName'), 'パターン名列が無い');
+  });
+
+  test.it('upsert キー列（SHEET_KEY_COLUMN）は実在する列', () => {
+    assert.strictEqual(schema.SHEET_KEY_COLUMN, 'patternId');
+    assert.ok(schema.sheetColumnIndex(schema.SHEET_KEY_COLUMN) > 0);
   });
 
   test.it('入力列と結果列の両方が存在する（結果セルも保存する）', () => {
@@ -107,7 +119,8 @@ test.describe('レコード組み立てと行変換（buildSheetRecord / sheetRo
   const record = schema.buildSheetRecord(
     { width: 610, height: 910, panelArea: panelArea, nails: nails },
     result,
-    recordedAt
+    recordedAt,
+    { projectName: 'A邸', patternId: 'p_001', patternName: '南面' }
   );
 
   test.it('入力値がレコードへ反映される', () => {
@@ -117,6 +130,19 @@ test.describe('レコード組み立てと行変換（buildSheetRecord / sheetRo
     assert.strictEqual(record.nailCount, 15);
     assert.strictEqual(record.schemaVersion, schema.SHEET_SCHEMA_VERSION);
     assert.strictEqual(record.recordedAt, recordedAt);
+  });
+
+  test.it('物件・パターン識別がレコードへ反映される', () => {
+    assert.strictEqual(record.projectName, 'A邸');
+    assert.strictEqual(record.patternId, 'p_001');
+    assert.strictEqual(record.patternName, '南面');
+  });
+
+  test.it('識別情報（meta）省略時は空欄になる', () => {
+    const r = schema.buildSheetRecord({ nails: [] }, {});
+    assert.strictEqual(r.projectName, '');
+    assert.strictEqual(r.patternId, '');
+    assert.strictEqual(r.patternName, '');
   });
 
   test.it('結果セルの値がレコードへ反映される', () => {
@@ -152,6 +178,18 @@ test.describe('レコード組み立てと行変換（buildSheetRecord / sheetRo
     const row = schema.sheetRowFromRecord(r);
     assert.strictEqual(row.length, schema.SHEET_COLUMNS.length);
   });
+
+  test.it('行 → レコードへ復元できる（sheetRecordFromRow の往復整合）', () => {
+    const row = schema.sheetRowFromRecord(record);
+    const restored = schema.sheetRecordFromRow(row);
+    // 全列キーで元レコードと一致すること（読み込み時のパターン復元に使う）。
+    schema.SHEET_COLUMNS.forEach((col) => {
+      const expected = record[col.key] === undefined ? '' : record[col.key];
+      assert.strictEqual(restored[col.key], expected, '往復不一致: ' + col.key);
+    });
+    // 釘座標 JSON も復元可能。
+    assert.strictEqual(JSON.parse(restored.nailCoords).length, 15);
+  });
 });
 
 test.describe('スキーマ自己記述（sheetSchemaDescriptor）', () => {
@@ -165,5 +203,12 @@ test.describe('スキーマ自己記述（sheetSchemaDescriptor）', () => {
     for (const col of d.columns) {
       assert.strictEqual(col.letter, schema.sheetColumnLetter(col.key));
     }
+  });
+
+  test.it('keyColumn と tabs（現在値・履歴）を返す', () => {
+    const d = schema.sheetSchemaDescriptor();
+    assert.strictEqual(d.keyColumn, schema.SHEET_KEY_COLUMN);
+    assert.strictEqual(d.tabs.current, schema.SHEET_CURRENT_TAB_NAME);
+    assert.strictEqual(d.tabs.history, schema.SHEET_HISTORY_TAB_NAME);
   });
 });
