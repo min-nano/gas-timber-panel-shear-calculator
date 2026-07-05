@@ -60,12 +60,15 @@
 ```
 .
 ├── src/                       # clasp のターゲット（rootDir = src）
-│   ├── appsscript.json        # マニフェスト（Web アプリ設定）
+│   ├── appsscript.json        # マニフェスト（Web アプリ設定 / OAuth スコープ）
 │   ├── NailArrayConstants.js  # 計算本体（唯一の計算実装）
-│   ├── WebApp.js              # doGet / 計算 API（サーバサイド）
+│   ├── SheetSchema.js         # 保存レイアウト（セルマッピング）の唯一の定義・バージョン管理
+│   ├── SheetStorage.js        # スプレッドシート保存の GAS I/O（SheetSchema を使用）
+│   ├── WebApp.js              # doGet / 計算・保存・スキーマ API（サーバサイド）
 │   └── index.html             # SPA（Vue3 + Tailwind, CDN 読込）
 ├── tests/                     # ユニットテスト（src とは別フォルダ）
-│   └── NailArrayConstants.test.js
+│   ├── NailArrayConstants.test.js
+│   └── SheetSchema.test.js    # セルマッピング（スキーマ）のリグレッションテスト
 ├── .github/workflows/ci.yml   # テスト & GAS デプロイ
 ├── .clasp.json.example        # .clasp.json のひな形
 └── package.json
@@ -119,12 +122,49 @@ npx clasp deploy -i "<GAS_DEPLOYMENT_ID>" -d "manual deploy"
 
 ---
 
+## スプレッドシートへの保存（フェーズ2）
+
+計算 1 回分を Google スプレッドシートへ **「1 行 = 1 計算スナップショット」** で追記保存します。
+入力値だけでなく **計算結果（Ixy・Zxy・Cxy ほか）も同じ行に列として記録**するため、
+将来この履歴を別のシート・帳票・スクリプトから参照するとき、再計算せずに結果を直接使えます。
+
+### セルマッピングのスキーマとバージョン管理
+
+他シート・他スクリプトが「Cxy は◯列」のように列位置をハードコードすると、
+列を 1 つ挿入しただけで全参照が静かにずれてバグの原因になります。これを防ぐため、
+**列レイアウト（セルのマッピング）を `src/SheetSchema.js` に唯一の定義として集約し、
+バージョン番号（`SHEET_SCHEMA_VERSION`）で管理**しています。
+
+- 各行に `スキーマ版` 列を記録するので、参照側は行ごとにレイアウト版を確認できます。
+- `sheetColumnLetter('Cxy')` のように **キー → 列文字を問い合わせ**できるため、
+  列位置が変わってもスキーマ 1 か所の追従で済みます。
+- 列の追加・削除・並べ替え・意味変更を行ったら `SHEET_SCHEMA_VERSION` を上げます
+  （過去行の版値は変更しません）。
+- マッピングは `tests/SheetSchema.test.js` で固定し、意図しない列ずれをリグレッション検知します。
+
+### サーバ API（`google.script.run`）
+
+| 関数 | 役割 |
+|------|------|
+| `saveCalculationApi(payload)` | 計算し直した結果ごと履歴へ追記。初回は新規スプレッドシートを作成し ID を返す（以降は同一シートへ追記） |
+| `getSheetSchemaApi()` | セルマッピング スキーマ（版・列一覧・A1 列文字）を返す |
+
+### 権限（最小スコープ）
+
+保存には最小権限として次を `src/appsscript.json` の `oauthScopes` に付与しています。
+`USER_ACCESSING` 実行のため、保存先は各ユーザー自身の Drive です。
+
+- `drive.file` … アプリが作成／選択したファイルのみアクセス
+- `spreadsheets` … スプレッドシートの読み書き
+
+---
+
 ## ロードマップ
 
 作業はセッションを分けて進めます。詳細な計画・前提・未決事項は **[ROADMAP.md](./ROADMAP.md)** を参照してください。
 
 - [x] **MVP**: 釘配列諸定数 Ixy・Zxy・Cxy の算定 ＋ 解説計算例のテスト（本番デプロイ済み）
 - [ ] **フェーズ1**: 面材・釘・枠材のマスタ（スプレッドシート）とプルダウン選択
-- [ ] **フェーズ2**: 起動時に保存先スプレッドシートを指定 → リアルタイム保存（自動履歴）
+- [x] **フェーズ2**: スプレッドシートへ入力＋結果を保存（自動履歴）。セルマッピングをスキーマ化しバージョン管理
 - [ ] **フェーズ3**: 耐力壁・水平構面の剛性・耐力の詳細計算（グレー本 3.3〜3.6 ※該当ページの追加添付が必要）
 - [ ] **フェーズ4**: Print CSS（`@media print` / A4）による計算書 PDF 出力

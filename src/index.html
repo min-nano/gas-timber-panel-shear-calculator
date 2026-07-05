@@ -104,6 +104,47 @@
             <p class="text-xs text-slate-400">{{ nails.length }} 本の釘を認識しました。</p>
           </div>
         </div>
+
+        <!-- スプレッドシート保存 -->
+        <div class="mt-6 pt-5 border-t border-slate-100">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-sm font-semibold text-slate-700">スプレッドシートへ保存</h3>
+            <label class="flex items-center gap-1.5 text-xs text-slate-500 select-none">
+              <input type="checkbox" v-model="autoSave" class="rounded border-slate-300">
+              自動保存（変更のたびに履歴を追記）
+            </label>
+          </div>
+
+          <div class="grid grid-cols-3 gap-2 items-end mb-2">
+            <label class="col-span-2 text-xs text-slate-500">
+              保存先の名前（未保存時に新規作成）
+              <input type="text" v-model="storageName"
+                :disabled="!!spreadsheetId"
+                class="mt-1 w-full rounded-md border-slate-300 border px-2 py-1.5 text-sm disabled:bg-slate-50 disabled:text-slate-400">
+            </label>
+            <button @click="save"
+              :disabled="saving || !result"
+              class="px-3 py-2 rounded-md bg-emerald-600 text-white text-sm hover:bg-emerald-500 disabled:bg-slate-300">
+              {{ saving ? '保存中…' : '今すぐ保存' }}
+            </button>
+          </div>
+
+          <p class="text-xs text-slate-400 leading-relaxed">
+            入力値だけでなく<span class="font-medium text-slate-500">計算結果も同じ行に記録</span>します。
+            列レイアウトはスキーマ版 <span class="font-mono">v{{ schemaVersion ?? '?' }}</span> で管理され、各行にも版が残ります。
+          </p>
+
+          <div v-if="storageError"
+            class="mt-2 rounded-md bg-red-50 border border-red-200 text-red-700 text-xs px-3 py-2">
+            保存に失敗しました: {{ storageError }}
+          </div>
+          <div v-if="lastSaved"
+            class="mt-2 rounded-md bg-emerald-50 border border-emerald-100 text-emerald-800 text-xs px-3 py-2">
+            <a :href="lastSaved.url" target="_blank" class="underline font-medium">保存先スプレッドシートを開く</a>
+            ／ {{ lastSaved.sheetName }} の {{ lastSaved.rowNumber }} 行目に記録
+            （{{ lastSaved.at }}、スキーマ v{{ lastSaved.schemaVersion }}）。
+          </div>
+        </div>
       </section>
 
       <!-- 計算結果エリア -->
@@ -171,7 +212,17 @@
           coordsText: '',
           result: null,
           errorMessage: '',
-          debounceTimer: null
+          debounceTimer: null,
+          // --- スプレッドシート保存 ---
+          storageName: '面材張り耐力要素 計算履歴',
+          spreadsheetId: null,   // 初回保存後に確定。以降は同一シートへ追記。
+          autoSave: false,
+          saving: false,
+          storageError: '',
+          lastSaved: null,       // { url, sheetName, rowNumber, at, schemaVersion }
+          lastSavedKey: null,    // 直近保存内容の指紋（同一連続保存の抑止）
+          schemaVersion: null,   // サーバのセルマッピング スキーマ版
+          saveTimer: null
         };
       },
       computed: {
@@ -217,10 +268,18 @@
       },
       watch: {
         panelArea() { this.scheduleCompute(); },
-        nails() { this.scheduleCompute(); }
+        nails() { this.scheduleCompute(); },
+        // 計算結果が更新され、自動保存が有効なら履歴へ追記する。
+        result() {
+          if (this.autoSave) this.scheduleSave();
+        },
+        autoSave(on) {
+          if (on) this.scheduleSave();
+        }
       },
       mounted() {
         this.scheduleCompute();
+        this.loadSchemaVersion();
       },
       methods: {
         parseNumberList(text) {
@@ -281,6 +340,68 @@
           } else {
             this.errorMessage = 'この画面は GAS Web アプリとして開いてください（google.script.run が利用できません）。';
           }
+        },
+        // サーバのセルマッピング スキーマ版を取得して表示に使う。
+        loadSchemaVersion() {
+          if (typeof google === 'undefined' || !google.script || !google.script.run) return;
+          google.script.run
+            .withSuccessHandler(res => {
+              if (res && res.ok && res.schema) this.schemaVersion = res.schema.version;
+            })
+            .withFailureHandler(() => {})
+            .getSheetSchemaApi();
+        },
+        // 自動保存のスケジュール（連続変更をまとめるため計算より長めに debounce）。
+        scheduleSave() {
+          clearTimeout(this.saveTimer);
+          this.saveTimer = setTimeout(this.save, 1200);
+        },
+        save() {
+          if (!this.result || this.saving) return;
+          // 同一内容の連続保存を抑止（自動保存で履歴が無駄に膨らむのを防ぐ）。
+          const key = JSON.stringify({
+            n: this.nails, a: this.panelArea, w: this.width, h: this.height, id: this.spreadsheetId
+          });
+          if (key === this.lastSavedKey) return;
+
+          if (typeof google === 'undefined' || !google.script || !google.script.run) {
+            this.storageError = 'この画面は GAS Web アプリとして開いてください（保存できません）。';
+            return;
+          }
+          this.saving = true;
+          this.storageError = '';
+          const payload = {
+            nails: this.nails,
+            panelArea: this.panelArea,
+            width: Number(this.width) || 0,
+            height: Number(this.height) || 0,
+            storage: {
+              spreadsheetId: this.spreadsheetId || undefined,
+              spreadsheetName: this.storageName
+            }
+          };
+          google.script.run
+            .withSuccessHandler(res => {
+              this.saving = false;
+              if (res && res.ok && res.storage) {
+                this.spreadsheetId = res.storage.spreadsheetId; // 以降は同一シートへ追記
+                this.lastSavedKey = key;
+                this.lastSaved = {
+                  url: res.storage.spreadsheetUrl,
+                  sheetName: res.storage.sheetName,
+                  rowNumber: res.storage.rowNumber,
+                  schemaVersion: res.storage.schemaVersion,
+                  at: new Date().toLocaleString('ja-JP')
+                };
+              } else {
+                this.storageError = (res && res.error) || '不明なエラー';
+              }
+            })
+            .withFailureHandler(err => {
+              this.saving = false;
+              this.storageError = (err && err.message) || String(err);
+            })
+            .saveCalculationApi(payload);
         },
         // 有効桁数（significant figures）で整形する。
         // 「小数点以下の桁数」固定だと、Zxy≈0.0036 や Zpxy≈0.0045 のような

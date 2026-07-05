@@ -55,3 +55,51 @@ function computeNailArrayConstantsApi(payload) {
     return { ok: false, error: err && err.message ? err.message : String(err) };
   }
 }
+
+/**
+ * クライアントから呼ばれる保存 API。
+ * 計算を実行し、入力値と結果を履歴シートへ「1 行 = 1 スナップショット」で追記する。
+ * 保存先が未指定なら新規スプレッドシートを作成し、その ID をクライアントへ返す
+ * （以降はその ID を渡してもらうことで同一シートへ追記され、履歴が蓄積される）。
+ *
+ * サーバ側で計算をやり直すため、保存される結果セルの値は必ずテスト済みロジックと一致する。
+ *
+ * @param {{nails:{x:number,y:number}[], panelArea:number,
+ *          width:number, height:number,
+ *          storage?:{spreadsheetId?:string, spreadsheetName?:string,
+ *                    sheetName?:string, folderId?:string}}} payload 入力＋保存先
+ * @return {{ok:boolean, result?:Object, storage?:Object, error?:string}}
+ */
+function saveCalculationApi(payload) {
+  try {
+    if (!payload || typeof payload !== 'object') {
+      throw new Error('入力が不正です。');
+    }
+    // 保存する結果は、表示と同じ唯一の実装で計算し直したものを用いる。
+    const result = computeNailArrayConstants(payload.nails, payload.panelArea);
+    const input = {
+      width: payload.width,
+      height: payload.height,
+      panelArea: payload.panelArea,
+      nails: payload.nails
+    };
+    const storage = saveSheetRecord(input, result, payload.storage || {});
+    return { ok: true, result: result, storage: storage };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+}
+
+/**
+ * セルマッピングのスキーマ（バージョン・列レイアウト）を返す API。
+ * UI や他ツールが列位置を機械的に把握するために使う。
+ *
+ * @return {{ok:boolean, schema?:Object, error?:string}}
+ */
+function getSheetSchemaApi() {
+  try {
+    return { ok: true, schema: sheetSchemaDescriptor() };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+}
