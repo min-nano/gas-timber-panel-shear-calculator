@@ -29,6 +29,50 @@
       </p>
     </header>
 
+    <!-- 物件・パターン（ページネーション） -->
+    <section class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-6 no-print">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <label class="text-xs text-slate-500">
+          物件名
+          <input type="text" v-model="projectName"
+            class="mt-1 w-full rounded-md border-slate-300 border px-2 py-1.5 text-sm"
+            placeholder="○○邸 新築工事">
+        </label>
+        <label class="text-xs text-slate-500">
+          パターン名（この物件内での識別名）
+          <input type="text" v-model="current.patternName"
+            class="mt-1 w-full rounded-md border-slate-300 border px-2 py-1.5 text-sm"
+            placeholder="南面 耐力壁 など">
+        </label>
+      </div>
+
+      <!-- パターン切替 -->
+      <div class="flex flex-wrap items-center gap-2 mt-4">
+        <div class="flex items-center gap-1">
+          <button @click="prevPattern" :disabled="currentIndex === 0"
+            class="px-2.5 py-1.5 rounded-md bg-slate-100 text-slate-600 text-sm disabled:opacity-40">‹</button>
+          <span class="text-sm text-slate-600 num px-1">
+            パターン {{ currentIndex + 1 }} / {{ patterns.length }}
+          </span>
+          <button @click="nextPattern" :disabled="currentIndex >= patterns.length - 1"
+            class="px-2.5 py-1.5 rounded-md bg-slate-100 text-slate-600 text-sm disabled:opacity-40">›</button>
+        </div>
+        <button @click="addPattern"
+          class="px-3 py-1.5 rounded-md bg-slate-800 text-white text-sm hover:bg-slate-700">＋ パターン追加</button>
+        <button @click="removePattern" :disabled="patterns.length <= 1"
+          class="px-3 py-1.5 rounded-md bg-slate-100 text-slate-600 text-sm disabled:opacity-40">このパターンを削除</button>
+
+        <!-- パターンのタブ -->
+        <div class="flex flex-wrap gap-1 ml-auto">
+          <button v-for="(p, i) in patterns" :key="p.patternId" @click="goToPattern(i)"
+            :class="i === currentIndex ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600'"
+            class="px-2.5 py-1 rounded-md text-xs num">
+            {{ p.patternName || ('パターン' + (i + 1)) }}
+          </button>
+        </div>
+      </div>
+    </section>
+
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
       <!-- 入力エリア -->
@@ -47,12 +91,12 @@
           <div class="grid grid-cols-3 gap-3">
             <label class="text-xs text-slate-500">
               幅 W [mm]
-              <input type="number" v-model.number="width"
+              <input type="number" v-model.number="current.width"
                 class="mt-1 w-full rounded-md border-slate-300 border px-2 py-1.5 text-sm num">
             </label>
             <label class="text-xs text-slate-500">
               高さ H [mm]
-              <input type="number" v-model.number="height"
+              <input type="number" v-model.number="current.height"
                 class="mt-1 w-full rounded-md border-slate-300 border px-2 py-1.5 text-sm num">
             </label>
             <div class="text-xs text-slate-500">
@@ -68,24 +112,24 @@
         <div class="mb-2">
           <h3 class="text-sm font-semibold text-slate-700 mb-2">釘配列</h3>
           <div class="flex gap-2 mb-3 text-xs">
-            <button @click="mode = 'grid'"
-              :class="mode === 'grid' ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-600'"
+            <button @click="current.mode = 'grid'"
+              :class="current.mode === 'grid' ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-600'"
               class="px-3 py-1.5 rounded-md">格子（グリッド）</button>
-            <button @click="mode = 'coords'"
-              :class="mode === 'coords' ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-600'"
+            <button @click="current.mode = 'coords'"
+              :class="current.mode === 'coords' ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-600'"
               class="px-3 py-1.5 rounded-md">座標を直接入力</button>
           </div>
 
-          <div v-if="mode === 'grid'" class="space-y-3">
+          <div v-if="current.mode === 'grid'" class="space-y-3">
             <label class="block text-xs text-slate-500">
               X 座標のリスト [mm]（カンマ区切り）
-              <input type="text" v-model="gridXText"
+              <input type="text" v-model="current.gridXText"
                 class="mt-1 w-full rounded-md border-slate-300 border px-2 py-1.5 text-sm num"
                 placeholder="0, 445, 890">
             </label>
             <label class="block text-xs text-slate-500">
               Y 座標のリスト [mm]（カンマ区切り）
-              <input type="text" v-model="gridYText"
+              <input type="text" v-model="current.gridYText"
                 class="mt-1 w-full rounded-md border-slate-300 border px-2 py-1.5 text-sm num"
                 placeholder="0, 145, 295, 445, 590">
             </label>
@@ -98,17 +142,76 @@
             <label class="block text-xs text-slate-500">
               釘座標「x, y」を1行に1本ずつ [mm]
             </label>
-            <textarea v-model="coordsText" rows="6"
+            <textarea v-model="current.coordsText" rows="6"
               class="w-full rounded-md border-slate-300 border px-2 py-1.5 text-sm num font-mono"
               placeholder="0, 0&#10;0, 145&#10;445, 295"></textarea>
             <p class="text-xs text-slate-400">{{ nails.length }} 本の釘を認識しました。</p>
+          </div>
+        </div>
+
+        <!-- スプレッドシート保存 -->
+        <div class="mt-6 pt-5 border-t border-slate-100">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-sm font-semibold text-slate-700">スプレッドシートへ保存</h3>
+            <label class="flex items-center gap-1.5 text-xs text-slate-500 select-none">
+              <input type="checkbox" v-model="autoSave" class="rounded border-slate-300">
+              自動保存（変更のたびに保存）
+            </label>
+          </div>
+
+          <div class="grid grid-cols-3 gap-2 items-end mb-2">
+            <label class="col-span-2 text-xs text-slate-500">
+              保存先の名前（未保存時に新規作成 ＝ 1 物件 1 ファイル）
+              <input type="text" v-model="storageName"
+                :disabled="!!spreadsheetId"
+                class="mt-1 w-full rounded-md border-slate-300 border px-2 py-1.5 text-sm disabled:bg-slate-50 disabled:text-slate-400">
+            </label>
+            <button @click="save"
+              :disabled="saving || !result"
+              class="px-3 py-2 rounded-md bg-emerald-600 text-white text-sm hover:bg-emerald-500 disabled:bg-slate-300">
+              {{ saving ? '保存中…' : 'このパターンを保存' }}
+            </button>
+          </div>
+
+          <p class="text-xs text-slate-400 leading-relaxed">
+            現在値タブ「パターン」に<span class="font-medium text-slate-500">1 行 = 1 パターン</span>で上書き保存し、
+            「履歴」タブへ追記します。入力値だけでなく<span class="font-medium text-slate-500">計算結果も同じ行に記録</span>。
+            列レイアウトはスキーマ版 <span class="font-mono">v{{ schemaVersion ?? '?' }}</span> で管理され、各行にも版が残ります。
+          </p>
+
+          <div v-if="storageError"
+            class="mt-2 rounded-md bg-red-50 border border-red-200 text-red-700 text-xs px-3 py-2">
+            {{ storageError }}
+          </div>
+          <div v-if="lastSaved"
+            class="mt-2 rounded-md bg-emerald-50 border border-emerald-100 text-emerald-800 text-xs px-3 py-2">
+            <a :href="lastSaved.url" target="_blank" class="underline font-medium">保存先スプレッドシートを開く</a>
+            ／ 現在値 {{ lastSaved.patternRow }} 行目・履歴 {{ lastSaved.historyRow }} 行目に記録
+            （{{ lastSaved.at }}、スキーマ v{{ lastSaved.schemaVersion }}）。
+          </div>
+
+          <!-- 既存物件の読み込み -->
+          <div class="mt-4 pt-3 border-t border-dashed border-slate-100">
+            <label class="block text-xs text-slate-500 mb-1">既存物件を読み込む（スプレッドシート ID）</label>
+            <div class="flex gap-2">
+              <input type="text" v-model="loadId"
+                class="flex-1 rounded-md border-slate-300 border px-2 py-1.5 text-sm font-mono"
+                placeholder="1AbC...（URL の /d/ と /edit の間）">
+              <button @click="loadProject" :disabled="loading"
+                class="px-3 py-1.5 rounded-md bg-slate-700 text-white text-sm hover:bg-slate-600 disabled:bg-slate-300">
+                {{ loading ? '読込中…' : '読み込む' }}
+              </button>
+            </div>
           </div>
         </div>
       </section>
 
       <!-- 計算結果エリア -->
       <section class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 print-full">
-        <h2 class="font-semibold text-slate-900 mb-4">計算結果</h2>
+        <h2 class="font-semibold text-slate-900 mb-4">
+          計算結果
+          <span class="text-xs font-normal text-slate-400">― {{ current.patternName || ('パターン' + (currentIndex + 1)) }}</span>
+        </h2>
 
         <div v-if="errorMessage"
           class="mb-4 rounded-md bg-red-50 border border-red-200 text-red-700 text-sm px-3 py-2">
@@ -160,30 +263,64 @@
   <script>
     const { createApp } = Vue;
 
+    // パターンの一意 ID を生成する（現在値タブの upsert キー）。
+    function newPatternId() {
+      return 'p_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+    }
+
+    let patternSeq = 0;
+    // 新しいパターン（入力状態）を作る。example=true でグレー本の計算例を初期値にする。
+    function makePattern(example) {
+      patternSeq += 1;
+      return {
+        patternId: newPatternId(),
+        patternName: 'パターン' + patternSeq,
+        width: 610,
+        height: 910,
+        mode: 'grid',
+        gridXText: example ? '0, 445, 890' : '',
+        gridYText: example ? '0, 145, 295, 445, 590' : '',
+        coordsText: ''
+      };
+    }
+
     createApp({
       data() {
         return {
-          width: 610,
-          height: 910,
-          mode: 'grid',
-          gridXText: '0, 445, 890',
-          gridYText: '0, 145, 295, 445, 590',
-          coordsText: '',
+          projectName: '',
+          patterns: [makePattern(true)], // 初期は計算例入りの1パターン
+          currentIndex: 0,
           result: null,
           errorMessage: '',
-          debounceTimer: null
+          debounceTimer: null,
+          // --- スプレッドシート保存 ---
+          storageName: '面材張り耐力要素 計算履歴',
+          spreadsheetId: null,   // 初回保存/読み込み後に確定。以降は同一物件へ。
+          autoSave: false,
+          saving: false,
+          storageError: '',
+          lastSaved: null,       // { url, patternRow, historyRow, at, schemaVersion }
+          savedKeys: {},         // patternId → 直近保存内容の指紋（同一連続保存の抑止）
+          schemaVersion: null,   // サーバのセルマッピング スキーマ版
+          saveTimer: null,
+          loadId: '',
+          loading: false
         };
       },
       computed: {
+        current() {
+          return this.patterns[this.currentIndex] || this.patterns[0];
+        },
         panelArea() {
-          const w = Number(this.width) || 0;
-          const h = Number(this.height) || 0;
+          const w = Number(this.current.width) || 0;
+          const h = Number(this.current.height) || 0;
           return w * h;
         },
         nails() {
-          if (this.mode === 'grid') {
-            const xs = this.parseNumberList(this.gridXText);
-            const ys = this.parseNumberList(this.gridYText);
+          const c = this.current;
+          if (c.mode === 'grid') {
+            const xs = this.parseNumberList(c.gridXText);
+            const ys = this.parseNumberList(c.gridYText);
             const out = [];
             for (const x of xs) {
               for (const y of ys) {
@@ -192,7 +329,7 @@
             }
             return out;
           }
-          return this.parseCoordLines(this.coordsText);
+          return this.parseCoordLines(c.coordsText);
         },
         steps() {
           if (!this.result) return [];
@@ -217,10 +354,18 @@
       },
       watch: {
         panelArea() { this.scheduleCompute(); },
-        nails() { this.scheduleCompute(); }
+        nails() { this.scheduleCompute(); },
+        // 計算結果が更新され、自動保存が有効なら保存する。
+        result() {
+          if (this.autoSave) this.scheduleSave();
+        },
+        autoSave(on) {
+          if (on) this.scheduleSave();
+        }
       },
       mounted() {
         this.scheduleCompute();
+        this.loadSchemaVersion();
       },
       methods: {
         parseNumberList(text) {
@@ -243,11 +388,32 @@
             .filter(p => isFinite(p.x) && isFinite(p.y));
         },
         loadExample() {
-          this.width = 610;
-          this.height = 910;
-          this.mode = 'grid';
-          this.gridXText = '0, 445, 890';
-          this.gridYText = '0, 145, 295, 445, 590';
+          const c = this.current;
+          c.width = 610;
+          c.height = 910;
+          c.mode = 'grid';
+          c.gridXText = '0, 445, 890';
+          c.gridYText = '0, 145, 295, 445, 590';
+          c.coordsText = '';
+        },
+        // --- パターン操作（ページネーション） ---
+        goToPattern(i) {
+          if (i >= 0 && i < this.patterns.length) this.currentIndex = i;
+        },
+        prevPattern() { this.goToPattern(this.currentIndex - 1); },
+        nextPattern() { this.goToPattern(this.currentIndex + 1); },
+        addPattern() {
+          const p = makePattern(false);
+          this.patterns.push(p);
+          this.currentIndex = this.patterns.length - 1;
+        },
+        removePattern() {
+          if (this.patterns.length <= 1) return;
+          const removed = this.patterns.splice(this.currentIndex, 1)[0];
+          if (removed) delete this.savedKeys[removed.patternId];
+          if (this.currentIndex >= this.patterns.length) {
+            this.currentIndex = this.patterns.length - 1;
+          }
         },
         scheduleCompute() {
           clearTimeout(this.debounceTimer);
@@ -281,6 +447,131 @@
           } else {
             this.errorMessage = 'この画面は GAS Web アプリとして開いてください（google.script.run が利用できません）。';
           }
+        },
+        // サーバのセルマッピング スキーマ版を取得して表示に使う。
+        loadSchemaVersion() {
+          if (typeof google === 'undefined' || !google.script || !google.script.run) return;
+          google.script.run
+            .withSuccessHandler(res => {
+              if (res && res.ok && res.schema) this.schemaVersion = res.schema.version;
+            })
+            .withFailureHandler(() => {})
+            .getSheetSchemaApi();
+        },
+        // 自動保存のスケジュール（連続変更をまとめるため計算より長めに debounce）。
+        scheduleSave() {
+          clearTimeout(this.saveTimer);
+          this.saveTimer = setTimeout(this.save, 1200);
+        },
+        // 現在パターンの保存内容の指紋（同一内容の連続保存を抑止する）。
+        saveKeyOf(patternId) {
+          return JSON.stringify({
+            id: this.spreadsheetId,
+            proj: this.projectName,
+            pid: patternId,
+            pname: this.current.patternName,
+            n: this.nails, a: this.panelArea,
+            w: this.current.width, h: this.current.height
+          });
+        },
+        save() {
+          if (!this.result || this.saving) return;
+          const patternId = this.current.patternId;
+          const key = this.saveKeyOf(patternId);
+          if (this.savedKeys[patternId] === key) return; // 変更が無ければ保存しない
+
+          if (typeof google === 'undefined' || !google.script || !google.script.run) {
+            this.storageError = 'この画面は GAS Web アプリとして開いてください（保存できません）。';
+            return;
+          }
+          this.saving = true;
+          this.storageError = '';
+          const payload = {
+            nails: this.nails,
+            panelArea: this.panelArea,
+            width: Number(this.current.width) || 0,
+            height: Number(this.current.height) || 0,
+            projectName: this.projectName,
+            patternId: patternId,
+            patternName: this.current.patternName,
+            storage: {
+              spreadsheetId: this.spreadsheetId || undefined,
+              spreadsheetName: this.storageName
+            }
+          };
+          google.script.run
+            .withSuccessHandler(res => {
+              this.saving = false;
+              if (res && res.ok && res.storage) {
+                this.spreadsheetId = res.storage.spreadsheetId; // 以降は同一物件へ
+                this.savedKeys[patternId] = key;
+                this.lastSaved = {
+                  url: res.storage.spreadsheetUrl,
+                  patternRow: res.storage.patternRow,
+                  historyRow: res.storage.historyRow,
+                  schemaVersion: res.storage.schemaVersion,
+                  at: new Date().toLocaleString('ja-JP')
+                };
+              } else {
+                this.storageError = '保存に失敗しました: ' + ((res && res.error) || '不明なエラー');
+              }
+            })
+            .withFailureHandler(err => {
+              this.saving = false;
+              this.storageError = '保存に失敗しました: ' + ((err && err.message) || String(err));
+            })
+            .saveCalculationApi(payload);
+        },
+        // シート上のレコード（1 行）を、アプリの入力パターンへ復元する。
+        recordToPattern(rec) {
+          let nails = [];
+          try { nails = JSON.parse(rec.nailCoords || '[]'); } catch (e) { nails = []; }
+          const coordsText = nails.map(n => n.x + ', ' + n.y).join('\n');
+          return {
+            patternId: rec.patternId || newPatternId(),
+            patternName: rec.patternName || 'パターン',
+            width: Number(rec.width) || 0,
+            height: Number(rec.height) || 0,
+            mode: 'coords',
+            gridXText: '',
+            gridYText: '',
+            coordsText: coordsText
+          };
+        },
+        // 既存物件（スプレッドシート）を読み込み、パターン一覧を復元する。
+        loadProject() {
+          const id = (this.loadId || '').trim();
+          if (!id) { this.storageError = '読み込むスプレッドシート ID を入力してください。'; return; }
+          if (typeof google === 'undefined' || !google.script || !google.script.run) {
+            this.storageError = 'この画面は GAS Web アプリとして開いてください（読み込めません）。';
+            return;
+          }
+          this.loading = true;
+          this.storageError = '';
+          google.script.run
+            .withSuccessHandler(res => {
+              this.loading = false;
+              if (res && res.ok) {
+                const pats = (res.patterns || []).map(rec => this.recordToPattern(rec));
+                if (pats.length === 0) {
+                  this.storageError = 'このスプレッドシートにパターンが見つかりませんでした。';
+                  return;
+                }
+                this.projectName = (res.patterns[0] && res.patterns[0].projectName) || this.projectName;
+                this.patterns = pats;
+                this.currentIndex = 0;
+                this.spreadsheetId = res.spreadsheetId;
+                this.savedKeys = {};
+                this.lastSaved = null;
+              } else {
+                this.storageError = '読み込みに失敗しました: ' + ((res && res.error) || '不明なエラー');
+              }
+            })
+            .withFailureHandler(err => {
+              this.loading = false;
+              this.storageError = '読み込みに失敗しました: ' + ((err && err.message) || String(err));
+            })
+            .listPatternsApi({ spreadsheetId: id });
         },
         // 有効桁数（significant figures）で整形する。
         // 「小数点以下の桁数」固定だと、Zxy≈0.0036 や Zpxy≈0.0045 のような
